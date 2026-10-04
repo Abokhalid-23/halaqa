@@ -232,7 +232,8 @@ function sesParts(s){
     o.beh=Math.max(0,2-(s.adab||0)-(s.uniform||0));
     o.part=s.part??2;
   }
-  o.total=o.att+o.nw+o.rev+o.beh+o.part;return o;
+  o.bonus=+s.bonus||0;
+  o.total=o.att+o.nw+o.rev+o.beh+o.part+o.bonus;return o;
 }
 const sesPoints=s=>r1(sesParts(s).total);
 
@@ -330,13 +331,13 @@ const normCode=v=>String(v).trim().toUpperCase().replace(/[٠-٩]/g,d=>"٠١٢٣
 const ALL=["","9999"];
 function statsFor(sid,rng=ALL){
   const ss=DB.sessions.filter(s=>s.sid===sid&&s.date>=rng[0]&&s.date<=rng[1]);
-  const o={new:0,minor:0,major:0,sessions:ss.length,days:0,present:0,late:0,absent:0,excused:0,points:0,ded:0,att:0,nw:0,rev:0,beh:0,part:0};
+  const o={new:0,minor:0,major:0,sessions:ss.length,days:0,present:0,late:0,absent:0,excused:0,points:0,ded:0,att:0,nw:0,rev:0,beh:0,part:0,bonus:0};
   ss.forEach(s=>{
     if(s.att!=="e")o.days++;
     o[{p:"present",l:"late",a:"absent",e:"excused"}[s.att]]++;
     for(const t in s.wards){const w=s.wards[t];if(w&&w.grade>0)o[t]+=ayahs(w)}
     const p=sesParts(s);PARTS.forEach(([k])=>o[k]+=p[k]);o.points+=p.total;
-    o.ded+=(s.adab||0)+(s.uniform||0);
+    o.ded+=(s.adab||0)+(s.uniform||0);o.bonus+=+s.bonus||0;
   });
   o.points=r1(o.points);o.avg=ss.length?r1(o.points/ss.length):0;
   o.attRate=o.days?Math.round((o.present+o.late)/o.days*100):0;
@@ -392,6 +393,7 @@ function statsHTML(st){
     <div class="stat"><div class="v">${st.present+st.late}</div><div class="k">حضور${st.late?` (منها ${st.late} تأخر)`:""}</div></div>
     <div class="stat"><div class="v">${st.excused}</div><div class="k">استئذان</div></div>
     <div class="stat"><div class="v">${st.absent}</div><div class="k">غياب</div></div>
+    ${st.bonus?`<div class="stat" style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center"><div class="k">نقاط إضافية من الأسئلة والمسابقات</div><div class="v" style="color:var(--good)">+${r1(st.bonus)}</div></div>`:""}
   </div><span class="lbl" style="margin-top:12px">متوسط كل معيار في اليوم</span>${partsHTML(st)}`;
 }
 function histHTML(sid,editable){
@@ -401,11 +403,12 @@ function histHTML(sid,editable){
     <div class="top"><span><b>${fmtDate(s.date)}</b> <span class="pill ${s.att}">${ANAME[s.att]}</span></span>
     <span class="num muted">${sesPoints(s)} / 10 ${editable?`<button class="link" data-edit="${s.date}">تعديل</button>`:""}</span></div>
     ${TYPES.map(([t,n])=>s.wards[t]?`<div class="wline">${n}: <b>${fmtRange(s.wards[t])}</b> · ${ayahs(s.wards[t])} آية · ${GNAME[s.wards[t].grade]}</div>`:"").join("")}
+    ${+s.bonus?`<div style="color:var(--good);font-size:.78rem;font-weight:700">+${+s.bonus} نقاط إضافية</div>`:""}
     ${s.adab||s.uniform?`<div class="ded">${s.adab?`خصم أدب ${s.adab}`:""}${s.adab&&s.uniform?" · ":""}${s.uniform?`خصم زي ${s.uniform}`:""}</div>`:""}
     ${s.note?`<div class="muted">ملاحظة: ${esc(s.note)}</div>`:""}
   </div>`).join("")}</div>`;
 }
-const RULES=`النقاط اليومية من 10: الحضور 2 (المستأذن لا يُخصم منه)، والحفظ الجديد 2، والمراجعة الصغرى والكبرى 2، والأدب والزي 2، والمشاركة والتفاعل 2. يُحتسب الحفظ والمراجعة حسب التقدير: ممتاز كاملة، جيد جداً 75%، جيد 50%، مقبول 25%، يعاد صفر.`;
+const RULES=`النقاط اليومية من 10: الحضور 2 (المستأذن لا يُخصم منه)، والحفظ الجديد 2، والمراجعة الصغرى والكبرى 2، والأدب والزي 2، والمشاركة والتفاعل 2. يُحتسب الحفظ والمراجعة حسب التقدير: ممتاز كاملة، جيد جداً 75%، جيد 50%، مقبول 25%، يعاد صفر. وتُضاف فوقها النقاط الإضافية التي يمنحها المعلم على الأسئلة والمسابقات.`;
 function boardHTML(cid,meId){
   const b=board(cid);const max=Math.max(1,...b.map(x=>x.st.points));
   return `<div class="lb">${b.map((x,i)=>`<div class="it ${x.s.id===meId?"me":""}">
@@ -474,6 +477,8 @@ function recHTML(studs){
       <div><span class="lbl">خصم الأدب</span>${segR("adab",DEDS.map(v=>[v,v?"−"+v:"لا يوجد"]),ex?ex.adab:0,true)}</div>
       <div><span class="lbl">خصم الزي</span>${segR("uniform",DEDS.map(v=>[v,v?"−"+v:"لا يوجد"]),ex?ex.uniform:0,true)}</div>
       <div><span class="lbl">المشاركة والتفاعل</span>${segR("part",PART,ex?(ex.part??2):2)}</div>
+      <div><label class="lbl" for="bonus">نقاط إضافية (أسئلة ومسابقات)</label><div class="row" style="gap:6px;align-items:center;flex-wrap:nowrap">
+        <button class="btn small" data-bonus="-1" aria-label="إنقاص">−</button><input type="number" id="bonus" min="0" max="50" step="0.5" inputmode="decimal" value="${ex?(+ex.bonus||0):0}" style="width:4.5em;text-align:center"><button class="btn small" data-bonus="1" aria-label="زيادة">+</button></div></div>
     </div>
     <div><label class="lbl" for="note">ملاحظة للطالب (اختياري)</label><textarea id="note" rows="2">${esc(ex?.note||"")}</textarea></div>
     <div class="row between">
@@ -552,7 +557,7 @@ async function saveSession(){
     next[t]=readRange(t+"n");
   }
   const val=n=>+document.querySelector(`input[name=${n}]:checked`).value;
-  const ses={id:uid(),sid:st.id,date:T.date,att,wards,adab:val("adab"),uniform:val("uniform"),part:val("part"),note:$("#note").value.trim()};
+  const ses={id:uid(),sid:st.id,date:T.date,att,wards,adab:val("adab"),uniform:val("uniform"),part:val("part"),bonus:Math.max(0,+$("#bonus").value||0),note:$("#note").value.trim()};
   ses.points=sesPoints(ses);
   TDB.sessions=TDB.sessions.filter(s=>!(s.sid===st.id&&s.date===T.date));
   TDB.sessions.push(ses);st.next=next;DIRTY=false;
@@ -608,6 +613,7 @@ document.addEventListener("click",e=>{
   if(d.sid){T.sid=d.sid;DIRTY=false;renderTeacher();return}
   if(d.goto){T.sid=d.goto;T.tab="rec";renderTeacher();return}
   if(d.edit){T.date=d.edit;renderTeacher();$("#form")?.scrollIntoView({behavior:"smooth"});return}
+  if(d.bonus){const el=$("#bonus");el.value=Math.max(0,(+el.value||0)+(+d.bonus));DIRTY=true;return}
   if(d.same){const r=readRange(d.same+"d");if(r)setRange(d.same+"n",r);else toast("حدد ورد اليوم أولاً");return}
   if(d.recode){const s=TDB.students.find(x=>x.id===d.recode);s.code=newCode();queue("recode",s.id,s.code);toast(`رمز ${s.name} الجديد: ${s.code}`);renderTeacher();return}
   if(d.rmask){$("#rm-"+d.rmask).innerHTML=`<span class="confirm">حذف الطالب وسجله؟ <button class="btn danger small" data-rm="${d.rmask}">نعم</button><button class="btn small" data-cancel>لا</button></span>`;return}

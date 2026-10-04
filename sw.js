@@ -1,5 +1,5 @@
 // Keeps the page usable with weak or no internet: the page comes from the network when it answers quickly, otherwise from the cache.
-const CACHE = "halaqa-v1";
+const CACHE = "halaqa-v2";
 const SHELL = ["./", "./index.html", "./manifest.json", "./logo.png"];
 
 self.addEventListener("install", e => {
