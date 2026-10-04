@@ -3,6 +3,12 @@
 <head>
 <base target="_top">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A7F96">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="أوراد الجليل">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="logo.png">
 <title>أوراد حلقة الجليل</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Reem+Kufi:wght@500;700&display=swap">
@@ -154,6 +160,9 @@ tfoot td{font-weight:700;border-top:2px solid var(--line);border-bottom:0}
 .login img{width:96px;height:96px;margin:0 auto}
 .login input{font-size:1.4rem;text-align:center;letter-spacing:.2em;width:100%;padding:10px;text-transform:uppercase}
 .err{color:var(--bad);font-size:.85rem;min-height:1.4em}
+.sync{font-size:.82rem;font-weight:600;border-radius:999px;padding:6px 14px;margin-bottom:12px;background:var(--sunk);color:var(--muted);width:fit-content;max-width:100%}
+.sync.ok{background:var(--accent-soft);color:var(--good)}
+.sync.warn{background:var(--gold-soft);color:var(--warn)}
 .toast{position:fixed;inset-inline:0;bottom:calc(20px + env(safe-area-inset-bottom,0px));margin:auto;width:max-content;max-width:calc(100% - 32px);background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:999px;font-weight:600;opacity:0;transform:translateY(10px);transition:.25s;pointer-events:none}
 .toast.show{opacity:1;transform:none}
 .confirm{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:.85rem}
@@ -173,6 +182,7 @@ tfoot td{font-weight:700;border-top:2px solid var(--line);border-bottom:0}
       <button id="tab-teacher" role="tab" aria-selected="false" data-view="teacher">المعلم</button>
     </nav>
   </header>
+  <div id="sync" class="sync" role="status" hidden></div>
   <main id="view"></main>
 </div>
 <div id="toast" class="toast" role="status"></div>
@@ -232,24 +242,83 @@ const pref=(k,v)=>{try{if(v===undefined)return localStorage.getItem(k);v===null?
 PIN=pref("halaqa-pin");
 const EXEC="https://script.google.com/macros/s/AKfycbxQeArqfR3RB0OIKTCBTgwwnYE8FJ9awnppoywmMHhcU1bf7--jiAlDckuRuP4oZ3Di/exec";
 // Inside Apps Script use google.script.run; on the standalone page call the same functions through doPost.
-const api=(fn,...args)=>window.google?.script?.run
-  ?new Promise((res,rej)=>google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args))
-  :fetch(EXEC,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({fn,args})})
-    .then(r=>r.json()).then(d=>{if(d.err)throw new Error(d.err);return d.ok});
-const errMsg=e=>{const m=String((e&&e.message)||e||"");if(/رمز المعلم|الطالب غير|الرمز 4|الحلقة/.test(m))return m.replace(/^.*?Error:\s*/,"");return "تعذّر الاتصال بالخادم. تأكد من الإنترنت وحاول مرة أخرى."};
+const api=(fn,...args)=>{
+  if(window.google?.script?.run)return new Promise((res,rej)=>google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
+  const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),25000);
+  return fetch(EXEC,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({fn,args}),signal:ctl.signal})
+    .then(r=>r.json()).then(d=>{if(d.err)throw new Error(d.err);return d.ok}).finally(()=>clearTimeout(tm));
+};
+const LOGIC_ERR=/رمز المعلم|الطالب غير|الرمز 4|الحلقة|unknown call/;
+const isAuthErr=e=>/رمز المعلم/.test(String(e&&e.message||e));
+const errMsg=e=>{const m=String((e&&e.message)||e||"");if(LOGIC_ERR.test(m))return m.replace(/^.*?Error:\s*/,"");return "لا يوجد اتصال بالخادم. تأكد من الإنترنت وحاول مرة أخرى."};
 function loadingHTML(t){return `<section class="panel" style="text-align:center;padding:40px 16px"><p class="muted" style="margin:0">${t||"جارٍ تحميل البيانات…"}</p></section>`}
+
+// ===== Offline: data cached on the device, changes queued and uploaded when the connection returns =====
+const jget=(k,d)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}};
+const jset=(k,v)=>{try{v==null?localStorage.removeItem(k):localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let OUTBOX=jget("halaqa-outbox",[]),SYNCING=false,NET=navigator.onLine!==false;
+const cacheT=()=>{if(TDB)jset("halaqa-tdb",TDB)};
+function queue(fn,...args){OUTBOX.push({fn,args});jset("halaqa-outbox",OUTBOX);cacheT();syncBar();flush()}
+async function flush(){
+  if(SYNCING||!OUTBOX.length||!PIN)return;
+  SYNCING=true;syncBar();
+  try{
+    while(OUTBOX.length){
+      const op=OUTBOX[0];
+      try{await api(op.fn,PIN,...op.args)}
+      catch(e){if(isAuthErr(e)||!LOGIC_ERR.test(String(e&&e.message||e)))throw e;toast("لم تُرفع عملية: "+errMsg(e))}
+      OUTBOX.shift();jset("halaqa-outbox",OUTBOX);NET=true;syncBar();
+    }
+    refreshTeacher();
+  }catch(e){NET=false;if(isAuthErr(e))toast("رمز المعلم تغيّر. سجّل الدخول من جديد لرفع التسجيلات المحفوظة.")}
+  finally{SYNCING=false;syncBar()}
+}
+async function refreshTeacher(){
+  try{const d=await api("teacherData",PIN);NET=true;if(OUTBOX.length)return;TDB=d;cacheT();pref("halaqa-tsync",new Date().toISOString());if(VIEW==="teacher"&&!formDirty())render()}
+  catch(e){NET=false}finally{syncBar()}
+}
+// don't wipe a half-filled form when fresh data arrives in the background
+let DIRTY=false;const formDirty=()=>DIRTY&&!!$("#form");
+function syncBar(){
+  const el=$("#sync");if(!el)return;
+  const n=OUTBOX.length;let cls="",txt="";
+  if(VIEW==="teacher"&&PIN){
+    if(SYNCING)txt="جارٍ رفع التسجيلات…";
+    else if(n)cls="warn",txt=`${n===1?"تسجيل واحد محفوظ":n===2?"تسجيلان محفوظان":n+" تسجيلات محفوظة"} على الجهاز، تُرفع عند توفر النت`;
+    else if(!NET)cls="warn",txt="بدون إنترنت · التسجيل يعمل ويُحفظ على الجهاز";
+    else cls="ok",txt="متصل · كل التسجيلات مرفوعة";
+  }else if(VIEW==="student"&&SDB&&!NET){cls="warn";const t=pref("halaqa-ssync");txt="بدون إنترنت · تعرض آخر بيانات محفوظة"+(t?` (${fmtTime(t)})`:"")}
+  el.className="sync "+cls;el.textContent=txt;el.hidden=!txt;
+}
+const fmtTime=iso=>{try{return new Date(iso).toLocaleString("ar",{weekday:"long",hour:"numeric",minute:"2-digit"})}catch(e){return ""}};
+window.addEventListener("online",()=>{NET=true;syncBar();flush();if(VIEW==="student"&&SV.code)loadStudent(SV.code,false,true)});
+window.addEventListener("offline",()=>{NET=false;syncBar()});
+setInterval(()=>{if(OUTBOX.length)flush()},30000);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")flush()});
+
 async function loadTeacher(fromLogin){
-  if(!fromLogin)$("#view").innerHTML=loadingHTML();
-  try{TDB=await api("teacherData",PIN);if(VIEW==="teacher")render()}
-  catch(err){if(fromLogin)throw err;TDB=null;if(/رمز المعلم/.test(String(err&&err.message))){PIN=null;pref("halaqa-pin",null)}render();toast(errMsg(err))}
+  if(!fromLogin&&!TDB){const c=jget("halaqa-tdb",null);if(c){TDB=c;render()}else $("#view").innerHTML=loadingHTML()}
+  try{
+    if(OUTBOX.length){await flush();if(OUTBOX.length){if(!TDB)throw new Error("offline");return}}
+    const d=await api("teacherData",PIN);NET=true;
+    if(OUTBOX.length)return;
+    TDB=d;cacheT();pref("halaqa-tsync",new Date().toISOString());if(VIEW==="teacher")render();
+  }catch(err){
+    if(fromLogin)throw err;
+    if(isAuthErr(err)){PIN=null;pref("halaqa-pin",null);TDB=null;jset("halaqa-tdb",null);render();toast(errMsg(err));return}
+    NET=false;
+    if(TDB){render();toast("لا يوجد اتصال. تعمل الآن على البيانات المحفوظة في جهازك.")}else{render();toast(errMsg(err))}
+  }finally{syncBar()}
 }
-async function loadStudent(code,fromLogin){
-  if(!fromLogin)$("#view").innerHTML=loadingHTML();
-  try{const d=await api("studentLogin",code);
-    if(!d){if(!fromLogin){SV.code=null;pref("halaqa-code",null);SDB=null;render()}return false}
-    SDB=d;SV.code=code;pref("halaqa-code",code);if(VIEW==="student")render();return true}
-  catch(err){toast(errMsg(err));if(!fromLogin){SDB=null;render()}return !fromLogin}
+async function loadStudent(code,fromLogin,quiet){
+  if(!fromLogin&&!SDB){const c=jget("halaqa-sdb",null);if(c&&c.code===code){SDB=c.data;render()}else $("#view").innerHTML=loadingHTML()}
+  try{const d=await api("studentLogin",code);NET=true;
+    if(!d){if(!fromLogin){SV.code=null;pref("halaqa-code",null);SDB=null;jset("halaqa-sdb",null);render()}return false}
+    SDB=d;SV.code=code;pref("halaqa-code",code);jset("halaqa-sdb",{code,data:d});pref("halaqa-ssync",new Date().toISOString());if(VIEW==="student")render();return true}
+  catch(err){NET=false;if(!quiet&&!SDB)toast(errMsg(err));if(!fromLogin)render();return !fromLogin}
+  finally{syncBar()}
 }
+const newCode=()=>{const CH="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";let c;do{c="";for(let i=0;i<6;i++)c+=CH[Math.floor(Math.random()*CH.length)]}while(TDB&&TDB.students.some(s=>s.code===c));return c};
 const pad=n=>String(n).padStart(2,"0");
 const dstr=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const today=()=>dstr(new Date());
@@ -485,11 +554,10 @@ async function saveSession(){
   const val=n=>+document.querySelector(`input[name=${n}]:checked`).value;
   const ses={id:uid(),sid:st.id,date:T.date,att,wards,adab:val("adab"),uniform:val("uniform"),part:val("part"),note:$("#note").value.trim()};
   ses.points=sesPoints(ses);
-  toast("جارٍ الحفظ…");
-  await api("saveSession",PIN,ses,next);
   TDB.sessions=TDB.sessions.filter(s=>!(s.sid===st.id&&s.date===T.date));
-  TDB.sessions.push(ses);st.next=next;
-  toast(`تم حفظ ورد ${st.name}: ${ses.points} من 10`);
+  TDB.sessions.push(ses);st.next=next;DIRTY=false;
+  queue("saveSession",ses,next);
+  toast(`حُفظ ورد ${st.name}: ${ses.points} من 10`);
   const studs=studentsIn(T.cid);const doneSet=new Set(TDB.sessions.filter(s=>s.date===T.date).map(s=>s.sid));
   const i=studs.findIndex(s=>s.id===st.id);
   const nx=studs.slice(i+1).concat(studs.slice(0,i)).find(s=>!doneSet.has(s.id));
@@ -528,6 +596,7 @@ function render(){
   document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-selected",b.dataset.view===VIEW));
   DB=VIEW==="teacher"?TDB:SDB;
   VIEW==="teacher"?renderTeacher():renderStudent();
+  syncBar();
 }
 const busy=(b,on)=>{if(b){b.disabled=on;b.style.opacity=on?.6:""}};
 async function act(btn,fn){busy(btn,true);try{await fn()}catch(err){toast(errMsg(err))}finally{busy(btn,false)}}
@@ -536,33 +605,33 @@ document.addEventListener("click",e=>{
   const d=b.dataset;
   if(d.view){VIEW=d.view;render();if(VIEW==="teacher"&&!TDB&&PIN)loadTeacher();if(VIEW==="student"&&!SDB&&SV.code)loadStudent(SV.code);return}
   if(d.ttab){T.tab=d.ttab;pref("halaqa-ttab",T.tab);renderTeacher();return}
-  if(d.sid){T.sid=d.sid;renderTeacher();return}
+  if(d.sid){T.sid=d.sid;DIRTY=false;renderTeacher();return}
   if(d.goto){T.sid=d.goto;T.tab="rec";renderTeacher();return}
   if(d.edit){T.date=d.edit;renderTeacher();$("#form")?.scrollIntoView({behavior:"smooth"});return}
   if(d.same){const r=readRange(d.same+"d");if(r)setRange(d.same+"n",r);else toast("حدد ورد اليوم أولاً");return}
-  if(d.recode){act(b,async()=>{const code=await api("recode",PIN,d.recode);const s=TDB.students.find(x=>x.id===d.recode);s.code=code;toast(`رمز ${s.name} الجديد: ${code}`);renderTeacher()});return}
+  if(d.recode){const s=TDB.students.find(x=>x.id===d.recode);s.code=newCode();queue("recode",s.id,s.code);toast(`رمز ${s.name} الجديد: ${s.code}`);renderTeacher();return}
   if(d.rmask){$("#rm-"+d.rmask).innerHTML=`<span class="confirm">حذف الطالب وسجله؟ <button class="btn danger small" data-rm="${d.rmask}">نعم</button><button class="btn small" data-cancel>لا</button></span>`;return}
-  if(d.rm){act(b,async()=>{await api("removeStudent",PIN,d.rm);TDB.students=TDB.students.filter(s=>s.id!==d.rm);TDB.sessions=TDB.sessions.filter(s=>s.sid!==d.rm);toast("تم حذف الطالب");renderTeacher()});return}
+  if(d.rm){TDB.students=TDB.students.filter(s=>s.id!==d.rm);TDB.sessions=TDB.sessions.filter(s=>s.sid!==d.rm);queue("removeStudent",d.rm);toast("تم حذف الطالب");renderTeacher();return}
   if("cancel" in d){render();return}
   switch(b.id){
-    case "saveSes":act(b,saveSession);break;
+    case "saveSes":saveSession();break;
     case "suggest":{const r=readRange("newd");const s=continueFrom(r);if(s)setRange("newn",s);else toast("حدد ورد الحفظ الجديد لليوم أولاً");break}
     case "delAsk":$("#delWrap").innerHTML=`<span class="confirm">تأكيد الحذف؟ <button class="btn danger small" id="delYes">نعم</button><button class="btn small" data-cancel>لا</button></span>`;break;
-    case "delYes":act(b,async()=>{await api("deleteSession",PIN,T.sid,T.date);TDB.sessions=TDB.sessions.filter(s=>!(s.sid===T.sid&&s.date===T.date));toast("تم حذف التسجيل");renderTeacher()});break;
-    case "renCircle":{const n=$("#rcName").value.trim();if(!n){toast("اكتب اسم الحلقة");break}act(b,async()=>{await api("renameCircle",PIN,T.cid,n);TDB.circles.find(c=>c.id===T.cid).name=n;toast("تم تغيير اسم الحلقة");renderTeacher()});break}
+    case "delYes":TDB.sessions=TDB.sessions.filter(s=>!(s.sid===T.sid&&s.date===T.date));queue("deleteSession",T.sid,T.date);toast("تم حذف التسجيل");renderTeacher();break;
+    case "renCircle":{const n=$("#rcName").value.trim();if(!n){toast("اكتب اسم الحلقة");break}TDB.circles.find(c=>c.id===T.cid).name=n;queue("renameCircle",T.cid,n);toast("تم تغيير اسم الحلقة");renderTeacher();break}
     case "delCircleAsk":$("#dcWrap").innerHTML=`<span class="confirm">حذف الحلقة؟ <button class="btn danger small" id="delCircleYes">نعم</button><button class="btn small" data-cancel>لا</button></span>`;break;
-    case "delCircleYes":act(b,async()=>{await api("deleteCircle",PIN,T.cid);TDB.circles=TDB.circles.filter(c=>c.id!==T.cid);T.cid=null;pref("halaqa-cid",null);toast("تم حذف الحلقة");renderTeacher()});break;
-    case "addCircle":{const n=$("#ncName").value.trim();if(!n){toast("اكتب اسم الحلقة");break}act(b,async()=>{const c=await api("addCircle",PIN,n);TDB.circles.push(c);T.cid=c.id;pref("halaqa-cid",c.id);toast("تمت إضافة الحلقة");renderTeacher()});break}
-    case "addStudent":{const n=$("#nsName").value.trim();if(!n){toast("اكتب اسم الطالب");break}act(b,async()=>{const s=await api("addStudent",PIN,T.cid,n);TDB.students.push(s);toast(`أضيف ${n} برمز ${s.code}`);renderTeacher();$("#nsName").focus()});break}
-    case "setPin":{const p=$("#newPin").value.trim();if(p.length<4){toast("الرمز 4 أحرف أو أرقام على الأقل");break}act(b,async()=>{await api("setPin",PIN,p);PIN=p;pref("halaqa-pin",p);toast("تم تغيير رمز المعلم");renderTeacher()});break}
+    case "delCircleYes":queue("deleteCircle",T.cid);TDB.circles=TDB.circles.filter(c=>c.id!==T.cid);T.cid=null;pref("halaqa-cid",null);toast("تم حذف الحلقة");renderTeacher();break;
+    case "addCircle":{const n=$("#ncName").value.trim();if(!n){toast("اكتب اسم الحلقة");break}const c={id:uid(),name:n};TDB.circles.push(c);T.cid=c.id;pref("halaqa-cid",c.id);queue("addCircle",n,c.id);toast("تمت إضافة الحلقة");renderTeacher();break}
+    case "addStudent":{const n=$("#nsName").value.trim();if(!n){toast("اكتب اسم الطالب");break}const s={id:uid(),cid:T.cid,name:n,code:newCode(),next:{}};TDB.students.push(s);queue("addStudent",T.cid,n,s.id,s.code);toast(`أضيف ${n} برمز ${s.code}`);renderTeacher();$("#nsName").focus();break}
+    case "setPin":{const p=$("#newPin").value.trim();if(p.length<4){toast("الرمز 4 أحرف أو أرقام على الأقل");break}if(OUTBOX.length){toast("انتظر حتى تُرفع التسجيلات المحفوظة، ثم غيّر الرمز");break}act(b,async()=>{await api("setPin",PIN,p);PIN=p;pref("halaqa-pin",p);toast("تم تغيير رمز المعلم");renderTeacher()});break}
     case "tRefresh":loadTeacher();break;
-    case "tLogout":PIN=null;TDB=null;pref("halaqa-pin",null);VIEW="student";render();break;
+    case "tLogout":if(OUTBOX.length){toast("يوجد تسجيلات لم تُرفع بعد. اتصل بالإنترنت أولاً حتى لا تضيع.");break}PIN=null;TDB=null;pref("halaqa-pin",null);jset("halaqa-tdb",null);VIEW="student";render();break;
     case "sRefresh":loadStudent(SV.code);break;
-    case "logout":SV.code=null;SDB=null;pref("halaqa-code",null);render();break;
+    case "logout":SV.code=null;SDB=null;pref("halaqa-code",null);jset("halaqa-sdb",null);render();break;
   }
 });
 document.addEventListener("change",e=>{
-  const el=e.target;
+  const el=e.target;if(el.closest("#form"))DIRTY=true;
   if(el.id==="tc"){T.cid=el.value;pref("halaqa-cid",T.cid);T.sid=null;renderTeacher();return}
   if(el.id==="td"){T.date=el.value||today();renderTeacher();return}
   if(el.name==="period"){T.period=el.value;renderTeacher();return}
@@ -570,7 +639,7 @@ document.addEventListener("change",e=>{
     if(rs.endsWith("d")&&tg&&!tg.checked&&el.value&&el.value!=="0"){tg.checked=true;el.closest(".ward").classList.remove("off")}return}
   if(/^(new|minor|major)on$/.test(el.id)){el.closest(".ward").classList.toggle("off",!el.checked);return}
 });
-document.addEventListener("input",e=>{if(e.target.dataset.rs)syncRange(e.target.dataset.rs,e.target.id)});
+document.addEventListener("input",e=>{if(e.target.closest("#form"))DIRTY=true;if(e.target.dataset.rs)syncRange(e.target.dataset.rs,e.target.id)});
 document.addEventListener("submit",async e=>{
   e.preventDefault();
   const btn=e.target.querySelector("button");
@@ -584,6 +653,7 @@ document.addEventListener("submit",async e=>{
   }
 });
 
+if("serviceWorker" in navigator&&location.hostname.endsWith("github.io"))navigator.serviceWorker.register("sw.js").catch(()=>{});
 render();
 if(VIEW==="teacher"&&PIN)loadTeacher();
 if(VIEW==="student"&&SV.code)loadStudent(SV.code);

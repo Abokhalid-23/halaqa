@@ -1,0 +1,12 @@
+{
+  "name": "أوراد حلقة الجليل",
+  "short_name": "أوراد الجليل",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "ar",
+  "background_color": "#F2F6F7",
+  "theme_color": "#0A7F96",
+  "icons": [{ "src": "logo.png", "sizes": "500x500", "type": "image/png", "purpose": "any" }]
+}
