@@ -354,6 +354,26 @@ function board(cid,rng){
   b.forEach(x=>x.tied=b.filter(y=>y.rank===x.rank).length>1);
   return b;
 }
+function circleTotals(cid,rng){
+  const t={new:0,minor:0,major:0,days:0,inn:0};
+  studentsIn(cid).forEach(s=>{const st=statsFor(s.id,rng);t.new+=st.new;t.minor+=st.minor;t.major+=st.major;t.days+=st.days;t.inn+=st.present+st.late});
+  t.all=t.new+t.minor+t.major;t.att=t.days?Math.round(t.inn/t.days*100):0;return t;
+}
+function circleHTML(cid,me){
+  const all=circleTotals(cid),wk=circleTotals(cid,[addDays(today(),-6),today()]);
+  const mine=statsFor(me.id),mineAll=mine.new+mine.minor+mine.major,share=all.all?Math.round(mineAll/all.all*100):0;
+  return `<section class="panel stack"><h2 style="margin:0">إنجاز حلقتنا</h2>
+    <div class="stats four">
+      <div class="stat hero"><div class="v">${all.all}</div><div class="k">آية سمّعتها الحلقة</div></div>
+      <div class="stat"><div class="v">${all.new}</div><div class="k">آية حفظ جديد</div></div>
+      <div class="stat"><div class="v">${all.minor+all.major}</div><div class="k">آية مراجعة</div></div>
+      <div class="stat"><div class="v">${wk.all}</div><div class="k">آية في آخر 7 أيام</div></div>
+    </div>
+    <div><div class="row between" style="font-size:.88rem"><span>مساهمتك: <b>${mineAll}</b> آية من إنجاز الحلقة</span><b class="num" style="color:var(--accent)">${share}%</b></div>
+      <div class="bar" style="height:10px;background:var(--sunk);border-radius:5px;overflow:hidden;margin-top:6px"><i style="display:block;height:100%;width:${share}%;background:var(--accent);border-radius:5px"></i></div>
+      <p class="muted" style="font-size:.8rem;margin:6px 0 0">كل آية تسمّعها تزيد إنجاز حلقتك. نسبة حضور الحلقة ${all.att}%.</p></div>
+  </section>`;
+}
 const rankTxt=x=>x.rank+(x.tied?" مكرر":"");
 
 // ===== UI helpers =====
@@ -596,6 +616,7 @@ function renderStudent(){
       <div><h2 style="margin:0;font-size:1.5rem">السلام عليكم يا ${esc(st.name)}</h2><span class="muted">${esc(circle?.name||"")} · ترتيبك ${rank} من ${studentsIn(st.cid).length}</span></div>
       <span class="row"><button class="btn small" id="sRefresh">تحديث</button><button class="btn small" id="logout">خروج</button></span></div></section>
     <section><h2>وردك القادم</h2><div class="next3">${TYPES.map(([t,n])=>{const r=st.next[t];return `<div class="nc" data-t="${t}"><div class="t">${n}</div><div class="r">${fmtRange(r)}</div><div class="muted" style="font-size:.82rem">${r?ayahs(r)+" آية":"لم يُحدَّد بعد"}</div></div>`}).join("")}</div></section>
+    ${circleHTML(st.cid,st)}
     <div class="grid2">
       <section class="panel"><h2>لوحة الصدارة</h2>${boardHTML(st.cid,st.id)}</section>
       <aside class="stack"><section class="panel"><h2>ملخص إنجازك</h2>${statsHTML(stt)}</section>
