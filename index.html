@@ -423,7 +423,6 @@ function boardHTML(cid,meId){
   return `<div class="lb">${b.map((x,i)=>`<div class="it ${x.s.id===meId?"me":""}">
     <div class="rk ${x.rank===1?"first":""}">${x.rank}${x.tied?'<small>مكرر</small>':""}</div>
     <div><div class="nm">${esc(x.s.name)}${x.s.id===meId?" (أنت)":""}</div>
-      <div class="muted" style="font-size:.78rem">${x.st.new} آية حفظ · ${x.st.minor+x.st.major} آية مراجعة · حضور ${x.st.attRate}%</div>
       <div class="bar"><i style="width:${Math.max(2,x.st.points/max*100)}%"></i></div></div>
     <div class="pts">${x.st.points}<small>نقطة</small></div></div>`).join("")}</div>
   <p class="muted" style="font-size:.78rem;margin:10px 0 0">${RULES}</p>`;
