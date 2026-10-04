@@ -139,10 +139,11 @@ tfoot td{font-weight:700;border-top:2px solid var(--line);border-bottom:0}
 .hist .wline{color:var(--muted)}
 .hist .wline b{color:var(--fg);font-weight:600}
 .lb{display:flex;flex-direction:column;gap:6px}
-.lb .it{display:grid;grid-template-columns:2em minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid var(--line)}
+.lb .it{display:grid;grid-template-columns:2.6em minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid var(--line)}
 .lb .it.me{border-color:var(--accent);background:var(--accent-soft)}
 .lb .rk{font-family:var(--display);font-size:1.15rem;text-align:center;color:var(--muted)}
-.lb .it:nth-child(1) .rk{color:var(--gold)}
+.lb .rk.first{color:var(--gold)}
+.lb .rk small{display:block;font-family:var(--body);font-size:.62rem;font-weight:700;line-height:1}
 .lb .nm{font-weight:700}
 .lb .bar{height:6px;background:var(--sunk);border-radius:3px;margin-top:4px;overflow:hidden}
 .lb .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
@@ -345,7 +346,15 @@ function statsFor(sid,rng=ALL){
 }
 const sessionsOf=sid=>DB.sessions.filter(s=>s.sid===sid).sort((a,b)=>b.date.localeCompare(a.date));
 const studentsIn=cid=>DB.students.filter(s=>s.cid===cid);
-const board=(cid,rng)=>studentsIn(cid).map(s=>({s,st:statsFor(s.id,rng)})).sort((a,b)=>b.st.points-a.st.points);
+// Equal points share the same rank (1, 1, 2 ...) and are marked as repeated.
+function board(cid,rng){
+  const b=studentsIn(cid).map(s=>({s,st:statsFor(s.id,rng)})).sort((a,b)=>b.st.points-a.st.points||a.s.name.localeCompare(b.s.name,"ar"));
+  let rank=0,prev=null;
+  b.forEach(x=>{if(x.st.points!==prev){rank++;prev=x.st.points}x.rank=rank});
+  b.forEach(x=>x.tied=b.filter(y=>y.rank===x.rank).length>1);
+  return b;
+}
+const rankTxt=x=>x.rank+(x.tied?" مكرر":"");
 
 // ===== UI helpers =====
 const $=s=>document.querySelector(s);
@@ -412,7 +421,7 @@ const RULES=`النقاط اليومية من 10: الحضور 2 (المستأذ
 function boardHTML(cid,meId){
   const b=board(cid);const max=Math.max(1,...b.map(x=>x.st.points));
   return `<div class="lb">${b.map((x,i)=>`<div class="it ${x.s.id===meId?"me":""}">
-    <div class="rk">${i+1}</div>
+    <div class="rk ${x.rank===1?"first":""}">${x.rank}${x.tied?'<small>مكرر</small>':""}</div>
     <div><div class="nm">${esc(x.s.name)}${x.s.id===meId?" (أنت)":""}</div>
       <div class="muted" style="font-size:.78rem">${x.st.new} آية حفظ · ${x.st.minor+x.st.major} آية مراجعة · حضور ${x.st.attRate}%</div>
       <div class="bar"><i style="width:${Math.max(2,x.st.points/max*100)}%"></i></div></div>
@@ -517,7 +526,7 @@ function sumHTML(){
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr><th>#</th><th>الطالب</th><th class="num">الحضور</th><th class="num">حفظ جديد</th><th class="num">مراجعة صغرى</th><th class="num">مراجعة كبرى</th><th class="num">المتوسط اليومي</th><th class="num">النقاط</th></tr></thead>
-      <tbody>${b.map((x,i)=>`<tr><td class="num">${i+1}</td><td><button class="link" data-goto="${x.s.id}">${esc(x.s.name)}</button></td><td class="num">${x.st.days?x.st.attRate+"%":"—"}</td><td class="num">${x.st.new}</td><td class="num">${x.st.minor}</td><td class="num">${x.st.major}</td><td class="num">${x.st.avg}</td><td class="num"><b>${x.st.points}</b></td></tr>`).join("")}</tbody>
+      <tbody>${b.map((x,i)=>`<tr><td class="num" style="white-space:nowrap">${rankTxt(x)}</td><td><button class="link" data-goto="${x.s.id}">${esc(x.s.name)}</button></td><td class="num">${x.st.days?x.st.attRate+"%":"—"}</td><td class="num">${x.st.new}</td><td class="num">${x.st.minor}</td><td class="num">${x.st.major}</td><td class="num">${x.st.avg}</td><td class="num"><b>${x.st.points}</b></td></tr>`).join("")}</tbody>
       <tfoot><tr><td></td><td>المجموع</td><td class="num">${attR}%</td><td class="num">${tot.new}</td><td class="num">${tot.minor}</td><td class="num">${tot.major}</td><td class="num">${avg}</td><td class="num">${r1(tot.points)}</td></tr></tfoot>
     </table></div>
     <p class="muted" style="font-size:.78rem;margin:0">${RULES}</p>
@@ -582,7 +591,7 @@ function renderStudent(){
     return;
   }
   const circle=DB.circles.find(c=>c.id===st.cid);const stt=statsFor(st.id);
-  const rank=board(st.cid).findIndex(x=>x.s.id===st.id)+1;
+  const me=board(st.cid).find(x=>x.s.id===st.id);const rank=rankTxt(me);
   $("#view").innerHTML=`<div class="stack">
     <section class="panel"><div class="row between">
       <div><h2 style="margin:0;font-size:1.5rem">السلام عليكم يا ${esc(st.name)}</h2><span class="muted">${esc(circle?.name||"")} · ترتيبك ${rank} من ${studentsIn(st.cid).length}</span></div>
